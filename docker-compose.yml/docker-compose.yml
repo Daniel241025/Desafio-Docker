@@ -7,6 +7,7 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
     ports:
       - "5432:5432"
     volumes:
@@ -17,9 +18,9 @@ services:
       interval: 5s
       retries: 5
 
-  airflow:
+  airflow-webserver:
     build: ./airflow
-    container_name: airflow
+    container_name: airflow-webserver
     depends_on:
       postgres:
         condition: service_healthy
@@ -27,22 +28,55 @@ services:
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
       AIRFLOW__CORE__EXECUTOR: "LocalExecutor"
       AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${AIRFLOW_DB}
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      _AIRFLOW_DB_UPGRADE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USER}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD}
     ports:
       - "8080:8080"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
-    command: ["webserver"]
+    command: >
+      bash -c "
+        airflow db init &&
+        airflow users create --username ${AIRFLOW_USER} --password ${AIRFLOW_PASSWORD} --firstname Admin --lastname User --role Admin --email admin@example.com &&
+        airflow webserver
+      "
+
+  airflow-scheduler:
+    build: ./airflow
+    container_name: airflow-scheduler
+    depends_on:
+      - airflow-webserver
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__EXECUTOR: "LocalExecutor"
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${AIRFLOW_DB}
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+    command: ["airflow", "scheduler"]
 
   superset:
     build: ./superset
     container_name: superset
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
+      SUPERSET_SECRET_KEY: "temporary-secret-key-change-in-production"
       SUPERSET_DATABASE_URI: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${SUPERSET_DB}
     ports:
       - "8088:8088"
-    command: ["superset", "run", "-p", "8088", "--with-threads", "--reload", "--debugger"]
+    volumes:
+      - superset_data:/app/superset_home
+    command: >
+      bash -c "
+        superset db upgrade &&
+        superset init &&
+        superset run -p 8088 --with-threads --reload --debugger
+      "
 
 volumes:
   postgres_data:
+  superset_data:
